@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Traffic Management</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#e2e8f0; --mut:#94a3b8;
+          --red:#ef4444; --yel:#eab308; --grn:#22c55e; --unk:#64748b; --blue:#38bdf8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; gap:12px; align-items:center; padding:12px 18px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0 12px 0 0; }
+  main { padding:16px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); }
+  .wide { grid-column:1/-1; }
+  select,input,button { font:inherit; padding:6px 10px; border-radius:6px; border:1px solid var(--line); background:#0b1220; color:var(--txt); }
+  button { cursor:pointer; background:#1d4ed8; border-color:#1d4ed8; }
+  button.sec { background:#0b1220; border-color:var(--line); }
+  button.danger { background:#b91c1c; border-color:#b91c1c; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  .badge { padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; background:#334155; }
+  .AUTOMATIC,.ONLINE { background:#14532d; color:#bbf7d0; }
+  .MANUAL,.WARNING,.DEGRADED { background:#713f12; color:#fde68a; }
+  .EMERGENCY,.OFFLINE { background:#7f1d1d; color:#fecaca; }
+  .UNKNOWN { background:#334155; color:#cbd5e1; }
+  #banner { display:none; padding:10px 18px; background:#7f1d1d; color:#fff; font-weight:600; }
+  #emergency { display:none; padding:10px 18px; background:#b91c1c; color:#fff; font-weight:600; }
+  .kv { display:grid; grid-template-columns:150px 1fr; gap:4px 10px; }
+  .kv div:nth-child(odd) { color:var(--mut); }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); font-size:13px; }
+  th { color:var(--mut); font-weight:600; }
+  .dot { display:inline-block; width:12px; height:12px; border-radius:50%; background:var(--unk); margin-right:6px; vertical-align:-1px; }
+  .dot.GREEN { background:var(--grn); } .dot.RED { background:var(--red); } .dot.YELLOW { background:var(--yel); } .dot.UNKNOWN { background:var(--unk); }
+  .alert { padding:6px 10px; border-radius:6px; margin:4px 0; font-size:13px; }
+  .alert.CRITICAL { background:#7f1d1d; } .alert.WARNING { background:#713f12; } .alert.INFO { background:#1e3a5f; }
+  #hist { max-height:360px; overflow:auto; }
+  .mut { color:var(--mut); }
+  #toast { position:fixed; right:16px; bottom:16px; max-width:380px; background:#111827; border:1px solid var(--line); padding:10px 14px; border-radius:8px; display:none; z-index:9; }
+  #toast.err { border-color:var(--red); } #toast.ok { border-color:var(--grn); }
+  svg text { fill:#e2e8f0; font:12px system-ui; }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<div id="emergency"></div>
+<header>
+  <h1>🚦 Factory Traffic Management</h1>
+  <label class="mut">Junction <select id="jsel"></select></label>
+  <span id="modeBadge" class="badge">-</span>
+  <span id="ctrlBadge" class="badge">-</span>
+  <span class="mut" id="refreshInfo"></span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Intersection (backend state)</h2>
+    <div class="row"><label><input type="radio" name="view" value="actual" checked> Confirmed (actual)</label>
+      <label><input type="radio" name="view" value="desired"> Requested (desired)</label></div>
+    <svg id="svg" viewBox="0 0 320 320" width="100%" style="max-width:360px"></svg>
+  </section>
+
+  <section class="card">
+    <h2>Junction detail</h2>
+    <div class="kv" id="kv"></div>
+    <h2 style="margin-top:14px">Signals</h2>
+    <table><thead><tr><th>Direction</th><th>Desired</th><th>Actual</th><th>Queue</th></tr></thead><tbody id="sigRows"></tbody></table>
+  </section>
+
+  <section class="card">
+    <h2>Active alerts</h2>
+    <div id="alerts"></div>
+    <h2 style="margin-top:14px">Pending controller command</h2>
+    <div id="pending" class="mut">none</div>
+  </section>
+
+  <section class="card">
+    <h2>Manual traffic control</h2>
+    <div id="manualInfo" class="mut" style="margin-bottom:8px"></div>
+    <div class="row">
+      <select id="mdir"><option>NORTH</option><option>SOUTH</option><option>EAST</option><option>WEST</option></select>
+      <button id="btnManual">Request manual GREEN</button>
+      <button id="btnAuto" class="sec">Return to automatic</button>
+    </div>
+    <div class="mut">Sends a command; the backend decides the safe YELLOW → ALL-RED → GREEN sequence.</div>
+  </section>
+
+  <section class="card">
+    <h2>Traffic simulation</h2>
+    <div class="row">
+      <select id="sdir"><option>NORTH</option><option>SOUTH</option><option>EAST</option><option>WEST</option></select>
+      <select id="stype"><option>TRUCK</option><option>FORKLIFT</option><option>EMPLOYEE_VEHICLE</option><option>EMERGENCY</option></select>
+      <button id="btnArrive">Vehicle arrives</button>
+      <button id="btnEmerg" class="danger">Emergency arrives</button>
+    </div>
+    <div class="row">
+      <select id="sclear"></select>
+      <button id="btnClear" class="sec">Vehicle cleared</button>
+      <button id="btnDup" class="sec">Re-send last event (duplicate)</button>
+      <button id="btnBurst" class="sec">+10 random</button>
+    </div>
+    <h2 style="margin-top:14px">Controller simulation</h2>
+    <div class="row">
+      <label><input type="checkbox" id="autoAck"> auto-ACK commands</label>
+      <button id="btnAck" class="sec">ACK pending command</button>
+      <button id="btnNack" class="sec">NACK pending</button>
+    </div>
+    <div class="row">
+      <select id="cstat"><option>ONLINE</option><option>OFFLINE</option><option>DEGRADED</option><option>UNKNOWN</option></select>
+      <button id="btnCtrl" class="sec">Set controller status</button>
+      <select id="dtype"><option>SENSOR</option><option>SIGNAL</option></select>
+      <select id="dstat"><option>OFFLINE</option><option>ONLINE</option><option>DEGRADED</option></select>
+      <button id="btnDev" class="sec">Set device status (selected direction)</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Waiting vehicles</h2>
+    <table><thead><tr><th>Vehicle</th><th>Type</th><th>Dir</th><th>Waiting</th></tr></thead><tbody id="vehRows"></tbody></table>
+  </section>
+
+  <section class="card wide">
+    <h2>Recent activity</h2>
+    <div class="row"><label class="mut">Filter <select id="hfilter"><option value="">all</option></select></label></div>
+    <div id="hist"><table><thead><tr><th>Time</th><th>Event</th><th>Dir</th><th>Change</th><th>Command</th><th>Details</th></tr></thead><tbody id="histRows"></tbody></table></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const DIRS = ["NORTH","SOUTH","EAST","WEST"];
+const $ = (id) => document.getElementById(id);
+let current = null;      // selected junction id
+let status = null;       // last status from backend
+let lastEvent = null;    // for the duplicate demo
+let seq = Date.now();
+let failures = 0;
+
+// ---------- helpers ----------
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const uid = (p) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6)}`;
+function toast(msg, kind) {
+  const t = $("toast"); t.textContent = msg; t.className = kind || ""; t.style.display = "block";
+  clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.display = "none"), 4500);
+}
+async function api(method, path, body) {
+  let res;
+  try {
+    res = await fetch("/api" + path, { method, headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  } catch (e) { throw new Error("Backend unavailable"); }
+  let json = null; try { json = await res.json(); } catch {}
+  if (!res.ok) {
+    const detail = json?.errorSources?.map((s) => `${s.path}: ${s.message}`).join("; ");
+    const err = new Error(`${json?.message || res.statusText}${detail ? " (" + detail + ")" : ""}`);
+    err.status = res.status; err.json = json; throw err;
+  }
+  return json;
+}
+async function act(label, fn) {
+  try { const r = await fn(); toast(`${label}: ${r?.data?.code || r?.message || "ok"}`, "ok"); await refresh(); return r; }
+  catch (e) { toast(`${label} failed: ${e.message}`, "err"); await refresh().catch(()=>{}); }
+}
+
+// ---------- rendering ----------
+function dot(state) { return `<span class="dot ${esc(state)}"></span>${esc(state)}`; }
+
+function drawIntersection(s) {
+  const view = document.querySelector('input[name="view"]:checked').value;
+  const sig = view === "actual" ? s.actual_signals : s.desired_signals;
+  const col = { GREEN:"#22c55e", YELLOW:"#eab308", RED:"#ef4444", UNKNOWN:"#64748b" };
+  const lamp = (x, y, d) => `<circle cx="${x}" cy="${y}" r="13" fill="${col[sig[d]] || col.UNKNOWN}" stroke="#0b1220" stroke-width="3"/>
+    <text x="${x}" y="${y+30}" text-anchor="middle">${d} · ${sig[d]}</text>`;
+  const emergencyDirs = new Set((s.emergency.vehicles || []).map((v) => v.direction));
+  const badge = (x, y, d) => (emergencyDirs.has(d) ? `<text x="${x}" y="${y}" text-anchor="middle" style="fill:#fca5a5;font-weight:700">🚑 EMERGENCY</text>` : "");
+  const q = (x, y, d) => `<text x="${x}" y="${y}" text-anchor="middle" style="fill:#94a3b8">queue ${s.queues[d]}</text>`;
+  $("svg").innerHTML = `
+    <rect x="0" y="0" width="320" height="320" fill="#0b1220" rx="8"/>
+    <rect x="130" y="0" width="60" height="320" fill="#334155"/><rect x="0" y="130" width="320" height="60" fill="#334155"/>
+    <rect x="130" y="130" width="60" height="60" fill="#475569"/>
+    ${lamp(160, 28, "NORTH")}${badge(160, 8, "NORTH")}${q(160, 72, "NORTH")}
+    ${lamp(160, 292, "SOUTH")}${badge(160, 312, "SOUTH")}${q(160, 258, "SOUTH")}
+    ${lamp(32, 160, "WEST")}${badge(50, 120, "WEST")}${q(40, 205, "WEST")}
+    ${lamp(288, 160, "EAST")}${badge(270, 120, "EAST")}${q(280, 205, "EAST")}`;
+}
+
+function render(s) {
+  $("modeBadge").className = "badge " + s.mode; $("modeBadge").textContent = "Mode: " + s.mode;
+  $("ctrlBadge").className = "badge " + s.controller_status; $("ctrlBadge").textContent = "Controller: " + s.controller_status;
+
+  const em = $("emergency");
+  if (s.emergency.active) {
+    const v = s.emergency.vehicles[0];
+    em.style.display = "block";
+    em.textContent = `🚨 EMERGENCY at Junction ${s.junction_id}: ${v.vehicle_id} from ${v.direction}. Backend stage: ${s.stage}${s.target_phase ? " → " + s.target_phase : ""}.`;
+  } else em.style.display = "none";
+
+  drawIntersection(s);
+
+  $("kv").innerHTML = [
+    ["Junction", `${esc(s.junction_id)} (${esc(s.name)})`],
+    ["Mode", esc(s.mode)],
+    ["Phase (green)", esc(s.phase ?? "— (all red)")],
+    ["Target phase", esc(s.target_phase ?? "—")],
+    ["Stage", esc(s.stage) + (s.seconds_in_stage !== null ? ` · ${s.seconds_in_stage}s confirmed` : " · awaiting confirmation")],
+    ["Controller", esc(s.controller_status)],
+    ["Needs resync", s.needs_resync ? "yes" : "no"],
+    ["Queue total", esc(s.queue_total)],
+    ["Updated", esc(new Date(s.updated_at).toLocaleTimeString())],
+  ].map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join("");
+
+  $("sigRows").innerHTML = DIRS.map((d) => {
+    const mismatch = s.actual_signals[d] !== "UNKNOWN" && s.actual_signals[d] !== s.desired_signals[d];
+    return `<tr><td>${d}</td><td>${dot(s.desired_signals[d])}</td><td>${dot(s.actual_signals[d])}${mismatch ? ' <span class="badge WARNING">≠</span>' : ""}</td><td>${s.queues[d]}</td></tr>`;
+  }).join("");
+
+  $("alerts").innerHTML = s.alerts.length
+    ? s.alerts.map((a) => `<div class="alert ${esc(a.severity)}"><b>${esc(a.code)}</b> — ${esc(a.message)}</div>`).join("")
+    : '<span class="mut">No active alerts</span>';
+
+  const p = s.pending_command;
+  $("pending").innerHTML = p
+    ? `<b>${esc(p.command_id)}</b> (${esc(p.kind)}, attempt ${esc(p.attempt)})<br><span class="mut">issued ${esc(new Date(p.issued_at).toLocaleTimeString())}</span><br>` +
+      DIRS.map((d) => `${d}: ${esc(p.requested_signals[d])}`).join(" · ")
+    : "none";
+  $("btnAck").disabled = $("btnNack").disabled = !p;
+
+  const m = s.manual;
+  $("manualInfo").innerHTML = m
+    ? `<span class="badge MANUAL">MANUAL OVERRIDE ACTIVE</span> ${esc(m.direction)} (${esc(m.phase)}), expires ${esc(new Date(m.expires_at).toLocaleTimeString())}` +
+      (m.suspended_by_emergency ? ' <span class="badge EMERGENCY">suspended by emergency</span>' : "")
+    : "Manual override is not active (automatic scheduling).";
+  $("btnAuto").disabled = !m;
+
+  $("vehRows").innerHTML = s.waiting_vehicles.length
+    ? s.waiting_vehicles.map((v) => `<tr><td>${esc(v.vehicle_id)}</td><td>${esc(v.vehicle_type)}</td><td>${esc(v.direction)}</td><td>${Math.round(v.waiting_ms / 1000)}s</td></tr>`).join("")
+    : '<tr><td colspan="4" class="mut">no vehicles waiting</td></tr>';
+
+  const sel = $("sclear"), keep = sel.value;
+  sel.innerHTML = s.waiting_vehicles.map((v) => `<option value="${esc(v.vehicle_id)}|${esc(v.direction)}">${esc(v.vehicle_id)} (${esc(v.direction)})</option>`).join("") || '<option value="">— none —</option>';
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+
+async function loadHistory() {
+  if (!current) return;
+  const type = $("hfilter").value;
+  const r = await api("GET", `/junctions/${encodeURIComponent(current)}/history?limit=40${type ? "&type=" + encodeURIComponent(type) : ""}`);
+  const entries = r.data.entries;
+  const types = new Set([...$("hfilter").options].map((o) => o.value));
+  for (const e of entries) if (!types.has(e.event_type)) { $("hfilter").add(new Option(e.event_type, e.event_type)); types.add(e.event_type); }
+  $("histRows").innerHTML = entries.map((e) => {
+    const d = e.details ? JSON.stringify(e.details) : "";
+    return `<tr><td>${esc(new Date(e.timestamp).toLocaleTimeString())}</td><td>${esc(e.event_type)}</td><td>${esc(e.direction ?? "")}</td>
+      <td>${e.previous_state || e.new_state ? esc((e.previous_state ?? "") + " → " + (e.new_state ?? "")) : ""}</td><td>${esc(e.command_id ?? "")}</td>
+      <td class="mut" title="${esc(d)}">${esc(d.length > 90 ? d.slice(0, 90) + "…" : d)}</td></tr>`;
+  }).join("");
+}
+
+// ---------- data loop (polling every 1s; see README for why not WebSocket) ----------
+async function loadJunctions() {
+  const r = await api("GET", "/junctions");
+  const sel = $("jsel"), ids = r.data.map((j) => j.junction_id);
+  if (JSON.stringify([...sel.options].map((o) => o.value)) !== JSON.stringify(ids)) {
+    sel.innerHTML = ids.map((i) => `<option>${esc(i)}</option>`).join("");
+  }
+  if (!current || !ids.includes(current)) current = ids[0] ?? null;
+  sel.value = current ?? "";
+}
+
+async function refresh() {
+  try {
+    await loadJunctions();
+    if (!current) { $("banner").style.display = "block"; $("banner").textContent = "No junctions exist yet."; return; }
+    const r = await api("GET", `/junctions/${encodeURIComponent(current)}/status`);
+    status = r.data; render(status);
+    await loadHistory();
+    failures = 0; $("banner").style.display = "none";
+    $("refreshInfo").textContent = "live · " + new Date().toLocaleTimeString();
+  } catch (e) {
+    failures++;
+    $("banner").style.display = "block";
+    $("banner").textContent = e.status === 404 ? `Junction not found: ${current}` : `⚠ ${e.message}. Retrying… (${failures})`;
+    if (e.status === 404) current = null;
+  }
+}
+
+async function syncSimulator() {
+  try { const r = await api("GET", "/simulator/controller"); $("autoAck").checked = r.data.settings.autoAck; } catch {}
+}
+
+// ---------- actions ----------
+function sensorEvent(over) {
+  const ev = { event_id: uid("ui"), junction_id: current, sequence_no: ++seq, timestamp: new Date().toISOString(), ...over };
+  lastEvent = ev; return ev;
+}
+const send = (ev) => api("POST", "/sensor-events", ev);
+
+$("jsel").onchange = () => { current = $("jsel").value; refresh(); };
+document.querySelectorAll('input[name="view"]').forEach((r) => (r.onchange = () => status && drawIntersection(status)));
+$("hfilter").onchange = () => loadHistory().catch(()=>{});
+
+$("btnArrive").onclick = () => act("Arrival", () => send(sensorEvent({ direction: $("sdir").value, event_type: "VEHICLE_ARRIVED", vehicle_id: uid("VH"), vehicle_type: $("stype").value })));
+$("btnEmerg").onclick = () => act("Emergency", () => send(sensorEvent({ direction: $("sdir").value, event_type: "VEHICLE_ARRIVED", vehicle_id: uid("AMB"), vehicle_type: "EMERGENCY" })));
+$("btnClear").onclick = () => {
+  const [vid, dir] = ($("sclear").value || "|").split("|");
+  if (!vid) return toast("Nothing to clear", "err");
+  act("Clearance", () => send(sensorEvent({ direction: dir, event_type: "VEHICLE_CLEARED", vehicle_id: vid })));
+};
+$("btnDup").onclick = () => lastEvent ? act("Duplicate", () => send(lastEvent)) : toast("Send an event first", "err");
+$("btnBurst").onclick = async () => {
+  const types = ["TRUCK","FORKLIFT","EMPLOYEE_VEHICLE","EMPLOYEE_VEHICLE"];
+  try { for (let i = 0; i < 10; i++) await send(sensorEvent({ direction: DIRS[Math.floor(Math.random()*4)], event_type: "VEHICLE_ARRIVED", vehicle_id: uid("VH"), vehicle_type: types[Math.floor(Math.random()*4)] })); toast("10 events sent", "ok"); }
+  catch (e) { toast("Burst failed: " + e.message, "err"); }
+  refresh();
+};
+
+$("btnManual").onclick = () => act("Manual request", () => api("POST", `/junctions/${current}/commands`, { command: "MANUAL_GREEN_REQUEST", direction: $("mdir").value }));
+$("btnAuto").onclick = () => act("Return to automatic", () => api("POST", `/junctions/${current}/commands`, { command: "RETURN_TO_AUTOMATIC" }));
+
+const ack = (st) => () => {
+  const p = status?.pending_command; if (!p) return toast("No pending command", "err");
+  act(st, () => api("POST", "/controller-events", { command_id: p.command_id, junction_id: current, status: st, actual_signals: p.requested_signals }));
+};
+$("btnAck").onclick = ack("ACK"); $("btnNack").onclick = ack("NACK");
+$("btnCtrl").onclick = () => act("Controller status", () => api("POST", "/controller-events", { event_id: uid("status"), junction_id: current, device_type: "SIGNAL_CONTROLLER", status: $("cstat").value, timestamp: new Date().toISOString() }));
+$("btnDev").onclick = () => act("Device status", () => api("POST", "/controller-events", { event_id: uid("status"), junction_id: current, device_type: $("dtype").value, direction: $("sdir").value, status: $("dstat").value, timestamp: new Date().toISOString() }));
+$("autoAck").onchange = () => act("Simulator", () => api("PUT", "/simulator/controller", { autoAck: $("autoAck").checked }));
+
+syncSimulator(); refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>

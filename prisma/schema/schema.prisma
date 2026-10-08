@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// One row per junction. `config` is the JunctionConfig (phases + timing).
+/// `state` is the full engine JunctionState (mode, stage, desired/actual signals,
+/// queue, emergencies, manual override, pending command, timestamps).
+/// `version` is the optimistic-concurrency counter.
+model Junction {
+  id        String   @id
+  name      String
+  config    Json
+  state     Json
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  processedEvents ProcessedEvent[]
+  auditLogs       AuditLog[]
+
+  @@map("junctions")
+}
+
+/// Idempotency + ordering ledger. (junctionId, eventId) is unique, so the same
+/// logical event can never be applied twice, even across restarts.
+model ProcessedEvent {
+  junctionId      String
+  eventId         String
+  kind            String
+  vehicleId       String?
+  direction       String?
+  sequenceNo      Int?
+  sensorTimestamp DateTime?
+  receivedAt      DateTime
+  outcome         String
+
+  junction Junction @relation(fields: [junctionId], references: [id], onDelete: Cascade)
+
+  @@id([junctionId, eventId])
+  @@index([junctionId, vehicleId, kind])
+  @@map("processed_events")
+}
+
+/// Append-only audit trail ("why is the junction in this state?").
+model AuditLog {
+  id            Int      @id @default(autoincrement())
+  junctionId    String
+  type          String
+  direction     String?
+  previousState String?
+  newState      String?
+  commandId     String?
+  details       Json?
+  at            DateTime
+
+  junction Junction @relation(fields: [junctionId], references: [id], onDelete: Cascade)
+
+  @@index([junctionId, id])
+  @@index([junctionId, type])
+  @@map("audit_logs")
+}
